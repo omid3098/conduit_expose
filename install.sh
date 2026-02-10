@@ -3,6 +3,13 @@
 # conduit-expose installer
 # One-liner: curl -sL <repo-url>/install.sh | sudo bash
 # ============================================================
+#
+# The { ... } block forces bash to read the ENTIRE script into
+# memory before executing. Without this, `curl | bash` reads
+# in chunks and interactive `read` commands break.
+#
+{
+
 set -euo pipefail
 
 # ============================================================
@@ -23,6 +30,46 @@ log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED} [ERR]${NC} $*"; }
 
 # ============================================================
+# TTY handling for curl | bash compatibility
+# ============================================================
+# Open /dev/tty once as fd 3 for all interactive prompts.
+# This works even when stdin is a pipe from curl.
+if ! exec 3</dev/tty 2>/dev/null; then
+    log_error "Cannot open /dev/tty for interactive input."
+    log_error "Please download and run the script directly instead:"
+    log_error "  wget -O install.sh ${REPO_URL:-https://github.com/omid3098/conduit_expose}/raw/main/install.sh && sudo bash install.sh"
+    exit 1
+fi
+
+# prompt "Prompt text" VARIABLE [DEFAULT]
+# Writes prompt to /dev/tty, reads response from /dev/tty (fd 3).
+prompt() {
+    local text="$1" var_name="$2" default="${3:-}"
+    if [ -n "$default" ]; then
+        printf "%b [%b%s%b]: " "$text" "${GREEN}" "$default" "${NC}" >/dev/tty
+    else
+        printf "%b: " "$text" >/dev/tty
+    fi
+    local reply
+    read -r reply <&3
+    reply="${reply:-$default}"
+    eval "$var_name=\$reply"
+}
+
+# confirm "Prompt text" [DEFAULT_YES]
+# Returns 0 (true) if user confirms, 1 (false) otherwise.
+confirm() {
+    local text="$1" default="${2:-Y}"
+    local hint="[Y/n]"
+    [ "$default" = "N" ] && hint="[y/N]"
+    printf "%b %s: " "$text" "$hint" >/dev/tty
+    local reply
+    read -r reply <&3
+    reply="${reply:-$default}"
+    [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+# ============================================================
 # Constants
 # ============================================================
 REPO_URL="https://github.com/omid3098/conduit_expose"
@@ -37,12 +84,12 @@ INTERNAL_PORT=8081
 # Helpers
 # ============================================================
 generate_secret() {
-    # 32-char hex string
-    head -c 16 /dev/urandom | xxd -p 2>/dev/null || openssl rand -hex 16 2>/dev/null || cat /proc/sys/kernel/random/uuid | tr -d '-'
+    head -c 16 /dev/urandom | xxd -p 2>/dev/null \
+        || openssl rand -hex 16 2>/dev/null \
+        || cat /proc/sys/kernel/random/uuid | tr -d '-'
 }
 
 random_port() {
-    # Random port between 10000-65000
     shuf -i 10000-65000 -n 1 2>/dev/null || echo $(( RANDOM % 55000 + 10000 ))
 }
 
@@ -57,9 +104,7 @@ check_docker() {
     if ! command -v docker &>/dev/null; then
         log_warn "Docker is not installed."
         echo ""
-        read -rp "$(echo -e "${CYAN}Install Docker automatically? [Y/n]:${NC} ")" install_docker < /dev/tty
-        install_docker="${install_docker:-Y}"
-        if [[ "$install_docker" =~ ^[Yy]$ ]]; then
+        if confirm "$(echo -e "${CYAN}Install Docker automatically?${NC}")" "Y"; then
             install_docker_engine
         else
             log_error "Docker is required. Please install Docker and re-run."
@@ -95,13 +140,11 @@ install_docker_engine() {
         exit 1
     fi
 
-    # Enable and start Docker
     if command -v systemctl &>/dev/null; then
         systemctl enable docker 2>/dev/null || true
         systemctl start docker 2>/dev/null || true
     fi
 
-    # Verify
     if ! docker info &>/dev/null; then
         log_error "Docker installation failed. Please install manually."
         exit 1
@@ -125,8 +168,7 @@ do_install() {
     # Check for existing installation
     if docker ps -a --format '{{.Names}}' | grep -qw "$CONTAINER_NAME"; then
         log_warn "Existing conduit-expose container found."
-        read -rp "$(echo -e "${YELLOW}Reinstall? This will replace the current installation [y/N]:${NC} ")" reinstall < /dev/tty
-        if [[ ! "$reinstall" =~ ^[Yy]$ ]]; then
+        if ! confirm "$(echo -e "${YELLOW}Reinstall? This will replace the current installation${NC}")" "N"; then
             log_info "Cancelled."
             exit 0
         fi
@@ -141,10 +183,9 @@ do_install() {
     echo ""
 
     # --- Port selection ---
-    local default_port
+    local default_port port
     default_port=$(random_port)
-    read -rp "$(echo -e "${CYAN}Expose port${NC} [${GREEN}${default_port}${NC}]: ")" user_port < /dev/tty
-    local port="${user_port:-$default_port}"
+    prompt "$(echo -e "${CYAN}Expose port${NC}")" port "$default_port"
 
     # Validate port
     if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
@@ -155,14 +196,13 @@ do_install() {
     # Check if port is in use
     if ss -tlnp 2>/dev/null | grep -q ":${port} " || netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
         log_warn "Port $port appears to be in use. Choose a different port."
-        read -rp "$(echo -e "${CYAN}Expose port${NC}: ")" port < /dev/tty
+        prompt "$(echo -e "${CYAN}Expose port${NC}")" port ""
     fi
 
     # --- Auth secret ---
-    local default_secret
+    local default_secret secret
     default_secret=$(generate_secret)
-    read -rp "$(echo -e "${CYAN}Auth secret${NC} [${GREEN}${default_secret}${NC}]: ")" user_secret < /dev/tty
-    local secret="${user_secret:-$default_secret}"
+    prompt "$(echo -e "${CYAN}Auth secret${NC}")" secret "$default_secret"
 
     if [ -z "$secret" ]; then
         log_error "Auth secret cannot be empty."
@@ -176,9 +216,7 @@ do_install() {
     echo -e "  Secret:  ${GREEN}${secret}${NC}"
     echo -e "  Image:   ${DIM}${IMAGE_NAME} (built locally)${NC}"
     echo ""
-    read -rp "$(echo -e "${CYAN}Proceed with these settings? [Y/n]:${NC} ")" confirm < /dev/tty
-    confirm="${confirm:-Y}"
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    if ! confirm "$(echo -e "${CYAN}Proceed with these settings?${NC}")" "Y"; then
         log_info "Cancelled."
         exit 0
     fi
@@ -194,7 +232,6 @@ do_install() {
     if command -v git &>/dev/null; then
         git clone --depth 1 "$REPO_URL" "$tmp_dir/src" 2>/dev/null
     else
-        # Fallback: download tarball
         log_info "git not found, downloading tarball..."
         curl -sL "${REPO_URL}/archive/refs/heads/main.tar.gz" -o "$tmp_dir/src.tar.gz"
         mkdir -p "$tmp_dir/src"
@@ -411,17 +448,13 @@ CTLSCRIPT
 # ============================================================
 # Entrypoint
 # ============================================================
-# When piped via curl, run install directly.
-# When run as a file, allow passing subcommands for management.
 case "${1:-}" in
     install|"")  do_install ;;
     uninstall)
-        # Allow running install.sh uninstall directly
         source "$CONFIG_FILE" 2>/dev/null || true
         check_root
         log_warn "This will remove conduit-expose completely."
-        read -rp "$(echo -e "${YELLOW}Are you sure? [y/N]:${NC} ")" confirm < /dev/tty
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        if confirm "$(echo -e "${YELLOW}Are you sure?${NC}")" "N"; then
             docker stop "$CONTAINER_NAME" 2>/dev/null || true
             docker rm "$CONTAINER_NAME" 2>/dev/null || true
             docker rmi "$IMAGE_NAME" 2>/dev/null || true
@@ -435,3 +468,10 @@ case "${1:-}" in
         exit 1
         ;;
 esac
+
+# Close tty fd
+exec 3<&-
+
+# exit prevents bash from trying to read more from the pipe after the block
+exit 0
+}
