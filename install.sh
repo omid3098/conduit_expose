@@ -57,7 +57,7 @@ check_docker() {
     if ! command -v docker &>/dev/null; then
         log_warn "Docker is not installed."
         echo ""
-        read -rp "$(echo -e "${CYAN}Install Docker automatically? [Y/n]:${NC} ")" install_docker
+        read -rp "$(echo -e "${CYAN}Install Docker automatically? [Y/n]:${NC} ")" install_docker < /dev/tty
         install_docker="${install_docker:-Y}"
         if [[ "$install_docker" =~ ^[Yy]$ ]]; then
             install_docker_engine
@@ -125,7 +125,7 @@ do_install() {
     # Check for existing installation
     if docker ps -a --format '{{.Names}}' | grep -qw "$CONTAINER_NAME"; then
         log_warn "Existing conduit-expose container found."
-        read -rp "$(echo -e "${YELLOW}Reinstall? This will replace the current installation [y/N]:${NC} ")" reinstall
+        read -rp "$(echo -e "${YELLOW}Reinstall? This will replace the current installation [y/N]:${NC} ")" reinstall < /dev/tty
         if [[ ! "$reinstall" =~ ^[Yy]$ ]]; then
             log_info "Cancelled."
             exit 0
@@ -143,7 +143,7 @@ do_install() {
     # --- Port selection ---
     local default_port
     default_port=$(random_port)
-    read -rp "$(echo -e "${CYAN}Expose port${NC} [${GREEN}${default_port}${NC}]: ")" user_port
+    read -rp "$(echo -e "${CYAN}Expose port${NC} [${GREEN}${default_port}${NC}]: ")" user_port < /dev/tty
     local port="${user_port:-$default_port}"
 
     # Validate port
@@ -155,13 +155,13 @@ do_install() {
     # Check if port is in use
     if ss -tlnp 2>/dev/null | grep -q ":${port} " || netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
         log_warn "Port $port appears to be in use. Choose a different port."
-        read -rp "$(echo -e "${CYAN}Expose port${NC}: ")" port
+        read -rp "$(echo -e "${CYAN}Expose port${NC}: ")" port < /dev/tty
     fi
 
     # --- Auth secret ---
     local default_secret
     default_secret=$(generate_secret)
-    read -rp "$(echo -e "${CYAN}Auth secret${NC} [${GREEN}${default_secret}${NC}]: ")" user_secret
+    read -rp "$(echo -e "${CYAN}Auth secret${NC} [${GREEN}${default_secret}${NC}]: ")" user_secret < /dev/tty
     local secret="${user_secret:-$default_secret}"
 
     if [ -z "$secret" ]; then
@@ -176,7 +176,7 @@ do_install() {
     echo -e "  Secret:  ${GREEN}${secret}${NC}"
     echo -e "  Image:   ${DIM}${IMAGE_NAME} (built locally)${NC}"
     echo ""
-    read -rp "$(echo -e "${CYAN}Proceed with these settings? [Y/n]:${NC} ")" confirm
+    read -rp "$(echo -e "${CYAN}Proceed with these settings? [Y/n]:${NC} ")" confirm < /dev/tty
     confirm="${confirm:-Y}"
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         log_info "Cancelled."
@@ -420,7 +420,7 @@ case "${1:-}" in
         source "$CONFIG_FILE" 2>/dev/null || true
         check_root
         log_warn "This will remove conduit-expose completely."
-        read -rp "$(echo -e "${YELLOW}Are you sure? [y/N]:${NC} ")" confirm
+        read -rp "$(echo -e "${YELLOW}Are you sure? [y/N]:${NC} ")" confirm < /dev/tty
         if [[ "$confirm" =~ ^[Yy]$ ]]; then
             docker stop "$CONTAINER_NAME" 2>/dev/null || true
             docker rm "$CONTAINER_NAME" 2>/dev/null || true
