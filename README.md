@@ -15,6 +15,19 @@ The installer will:
 - Ask you to pick an **expose port** (random high port suggested by default)
 - Generate an **auth secret** (or let you set your own)
 - Build and start the agent as a Docker container
+- Print a **connection URI** you can paste straight into your monitoring dashboard
+
+```
+=====================================
+   Installation complete!
+=====================================
+
+  Connection URI (paste into your monitoring dashboard):
+
+  conduit://0267b7e7b00b59b99fa99095bf09ea6e@5.75.150.242:44626
+
+  Manage: conduit-expose-ctl [status|restart|update|uninstall|show-config|uri]
+```
 
 > **Anti-censorship note:** The expose port is randomized by default (range 10000-65000) so that scanners cannot fingerprint conduit servers by probing a known port.
 
@@ -35,6 +48,26 @@ The installer will:
 2. **Docker Stats** - Collects CPU%, memory usage, and uptime for each container
 3. **App Metrics** - Queries each container's internal Prometheus endpoint (`<container-ip>:9090/metrics`) for connection and traffic data
 4. **HTTP API** - Serves aggregated JSON on `GET /status`, protected by an auth header
+
+## Connection URI
+
+The installer outputs a single-line URI that encodes everything a monitoring dashboard needs:
+
+```
+conduit://SECRET@HOST:PORT
+```
+
+| Part | Maps to |
+|---|---|
+| `SECRET` | Value for the `X-Conduit-Auth` header |
+| `HOST:PORT` | The HTTP endpoint (`GET http://HOST:PORT/status`) |
+
+Retrieve it any time with:
+
+```bash
+conduit-expose-ctl uri          # raw URI, no colors (for scripts)
+conduit-expose-ctl show-config  # full config including URI
+```
 
 ## API
 
@@ -97,9 +130,10 @@ After installation, use `conduit-expose-ctl` to manage the agent:
 
 ```bash
 conduit-expose-ctl status       # Show running state, port, uptime
-conduit-expose-ctl show-config  # Display port and auth secret
+conduit-expose-ctl show-config  # Display config and connection URI
+conduit-expose-ctl uri          # Print raw connection URI (for scripts)
 conduit-expose-ctl restart      # Restart the container
-conduit-expose-ctl update       # Pull latest source, rebuild, redeploy
+conduit-expose-ctl update       # Pull latest source, rebuild, redeploy (also updates the ctl itself)
 conduit-expose-ctl uninstall    # Remove everything
 ```
 

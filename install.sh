@@ -32,17 +32,18 @@ log_error()   { echo -e "${RED} [ERR]${NC} $*"; }
 # ============================================================
 # TTY handling for curl | bash compatibility
 # ============================================================
-# Open /dev/tty once as fd 3 for all interactive prompts.
-# This works even when stdin is a pipe from curl.
-if ! exec 3</dev/tty 2>/dev/null; then
-    log_error "Cannot open /dev/tty for interactive input."
-    log_error "Please download and run the script directly instead:"
-    log_error "  wget -O install.sh ${REPO_URL:-https://github.com/omid3098/conduit_expose}/raw/main/install.sh && sudo bash install.sh"
-    exit 1
+# Only open /dev/tty for interactive modes (install, uninstall).
+# Non-interactive modes like update-ctl skip this.
+if [ "${1:-}" != "update-ctl" ]; then
+    if ! exec 3</dev/tty 2>/dev/null; then
+        log_error "Cannot open /dev/tty for interactive input."
+        log_error "Please download and run the script directly instead:"
+        log_error "  wget -O install.sh https://github.com/omid3098/conduit_expose/raw/main/install.sh && sudo bash install.sh"
+        exit 1
+    fi
 fi
 
 # prompt "Prompt text" VARIABLE [DEFAULT]
-# Writes prompt to /dev/tty, reads response from /dev/tty (fd 3).
 prompt() {
     local text="$1" var_name="$2" default="${3:-}"
     if [ -n "$default" ]; then
@@ -57,7 +58,6 @@ prompt() {
 }
 
 # confirm "Prompt text" [DEFAULT_YES]
-# Returns 0 (true) if user confirms, 1 (false) otherwise.
 confirm() {
     local text="$1" default="${2:-Y}"
     local hint="[Y/n]"
@@ -91,6 +91,10 @@ generate_secret() {
 
 random_port() {
     shuf -i 10000-65000 -n 1 2>/dev/null || echo $(( RANDOM % 55000 + 10000 ))
+}
+
+get_server_ip() {
+    hostname -I 2>/dev/null | awk '{print $1}' || hostname
 }
 
 check_root() {
@@ -258,10 +262,16 @@ do_install() {
     log_success "Container started"
 
     # --- Save config ---
+    local server_ip
+    server_ip=$(get_server_ip)
+    local connection_uri="conduit://${secret}@${server_ip}:${port}"
+
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_FILE" <<CONF
 PORT=${port}
 AUTH_SECRET=${secret}
+SERVER_IP=${server_ip}
+CONNECTION_URI=${connection_uri}
 CONTAINER_NAME=${CONTAINER_NAME}
 IMAGE_NAME=${IMAGE_NAME}
 INSTALLED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -273,20 +283,16 @@ CONF
     install_ctl
 
     # --- Done ---
-    local server_ip
-    server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || hostname)
-
     echo ""
     echo -e "${GREEN}${BOLD}=====================================${NC}"
     echo -e "${GREEN}${BOLD}   Installation complete!${NC}"
     echo -e "${GREEN}${BOLD}=====================================${NC}"
     echo ""
-    echo -e "  ${BOLD}Endpoint:${NC}  http://${server_ip}:${port}/status"
-    echo -e "  ${BOLD}Health:${NC}    http://${server_ip}:${port}/health"
-    echo -e "  ${BOLD}Auth:${NC}      X-Conduit-Auth: ${secret}"
-    echo -e "  ${BOLD}Manage:${NC}    conduit-expose-ctl [status|restart|update|uninstall|show-config]"
+    echo -e "  ${BOLD}Connection URI${NC} ${DIM}(paste into your monitoring dashboard):${NC}"
     echo ""
-    echo -e "${DIM}Save the endpoint and auth secret for your monitoring dashboard.${NC}"
+    echo -e "  ${GREEN}${connection_uri}${NC}"
+    echo ""
+    echo -e "  ${BOLD}Manage:${NC}  conduit-expose-ctl [status|restart|update|uninstall|show-config|uri]"
     echo ""
 }
 
@@ -366,6 +372,11 @@ cmd_update() {
     docker build -t "$IMAGE_NAME" "$tmp_dir/src" --quiet
     log_success "Image rebuilt"
 
+    # Self-update: overwrite this script with the latest version
+    log_info "Updating management CLI..."
+    bash "$tmp_dir/src/install.sh" update-ctl
+    log_success "Management CLI updated"
+
     log_info "Recreating container (preserving config)..."
     docker stop "$CONTAINER_NAME" 2>/dev/null || true
     docker rm "$CONTAINER_NAME" 2>/dev/null || true
@@ -415,17 +426,20 @@ cmd_show_config() {
     echo ""
     echo -e "${BOLD}conduit-expose config${NC}"
     echo ""
-    echo -e "  Port:       ${GREEN}${PORT}${NC}"
-    echo -e "  Secret:     ${GREEN}${AUTH_SECRET}${NC}"
+    echo -e "  ${BOLD}Connection URI:${NC}"
+    echo -e "  ${GREEN}${CONNECTION_URI:-conduit://${AUTH_SECRET}@${SERVER_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}:${PORT}}${NC}"
+    echo ""
+    echo -e "  Port:       ${PORT}"
+    echo -e "  Secret:     ${AUTH_SECRET}"
     echo -e "  Container:  ${CONTAINER_NAME}"
     echo -e "  Installed:  ${INSTALLED_AT:-unknown}"
     echo ""
+}
 
-    local server_ip
-    server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || hostname)
-    echo -e "  ${BOLD}Endpoint:${NC}  http://${server_ip}:${PORT}/status"
-    echo -e "  ${BOLD}Header:${NC}    X-Conduit-Auth: ${AUTH_SECRET}"
-    echo ""
+cmd_uri() {
+    load_config
+    local uri="${CONNECTION_URI:-conduit://${AUTH_SECRET}@${SERVER_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}:${PORT}}"
+    echo "$uri"
 }
 
 case "${1:-}" in
@@ -434,8 +448,9 @@ case "${1:-}" in
     update)      cmd_update ;;
     uninstall)   cmd_uninstall ;;
     show-config) cmd_show_config ;;
+    uri)         cmd_uri ;;
     *)
-        echo "Usage: conduit-expose-ctl {status|restart|update|uninstall|show-config}"
+        echo "Usage: conduit-expose-ctl {status|restart|update|uninstall|show-config|uri}"
         exit 1
         ;;
 esac
@@ -463,14 +478,19 @@ case "${1:-}" in
             log_success "conduit-expose uninstalled"
         fi
         ;;
+    update-ctl)
+        # Silent mode: only regenerate the ctl script.
+        # Called by `conduit-expose-ctl update` during self-update.
+        install_ctl
+        ;;
     *)
         echo "Usage: install.sh [install|uninstall]"
         exit 1
         ;;
 esac
 
-# Close tty fd
-exec 3<&-
+# Close tty fd (only if it was opened)
+exec 3<&- 2>/dev/null || true
 
 # exit prevents bash from trying to read more from the pipe after the block
 exit 0
