@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(dir:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:conduit.psiphon.ca)",
+      "Bash(go version:*)",
+      "Bash(docker version:*)",
+      "WebFetch(domain:prometheus.io)",
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(go doc:*)",
+      "Bash(go vet:*)"
+    ]
+  }
+}
