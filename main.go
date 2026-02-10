@@ -37,11 +37,8 @@ func main() {
 	}
 	log.Println("Connected to Docker daemon")
 
-	// Initialize GeoIP resolver (nil if DB not found)
-	geo := NewGeoIPResolver(cfg.GeoIPPath)
-	if geo != nil {
-		defer geo.Close()
-	}
+	// Initialize GeoIP resolver (embedded data, always available)
+	geo := NewGeoIPResolver()
 
 	// Initialize session tracker
 	session := NewSessionTracker()

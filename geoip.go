@@ -1,64 +1,31 @@
 package main
 
 import (
-	"log"
 	"net"
-	"os"
-	"sync"
 
-	"github.com/oschwald/geoip2-golang"
+	"github.com/phuslu/iploc"
 )
 
-// GeoIPResolver resolves IP addresses to ISO country codes using a MaxMind GeoLite2 database.
-type GeoIPResolver struct {
-	db    *geoip2.Reader
-	cache sync.Map // string(IP) → string(country code)
+// GeoIPResolver resolves IP addresses to ISO country codes using embedded IP data.
+// Uses github.com/phuslu/iploc which bundles IP-to-country mappings directly in the binary —
+// no external database files, license keys, or downloads required.
+type GeoIPResolver struct{}
+
+// NewGeoIPResolver creates a resolver. Always succeeds since data is embedded.
+func NewGeoIPResolver() *GeoIPResolver {
+	return &GeoIPResolver{}
 }
 
-// NewGeoIPResolver loads the GeoLite2-Country database from the given path.
-// Returns nil (not an error) if the database file does not exist, enabling graceful degradation.
-func NewGeoIPResolver(dbPath string) *GeoIPResolver {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		log.Printf("WARN: GeoIP database not found at %s, country resolution disabled", dbPath)
-		return nil
-	}
-
-	db, err := geoip2.Open(dbPath)
-	if err != nil {
-		log.Printf("WARN: failed to open GeoIP database: %v, country resolution disabled", err)
-		return nil
-	}
-
-	log.Printf("GeoIP database loaded from %s", dbPath)
-	return &GeoIPResolver{db: db}
-}
-
-// Lookup returns the ISO country code for the given IP, or "XX" if unknown.
+// Lookup returns the ISO country code for the given IP (e.g. "IR", "CN"),
+// or "XX" if unknown.
 func (g *GeoIPResolver) Lookup(ip net.IP) string {
 	if g == nil {
 		return ""
 	}
 
-	key := ip.String()
-
-	// Check cache first
-	if cached, ok := g.cache.Load(key); ok {
-		return cached.(string)
-	}
-
-	record, err := g.db.Country(ip)
-	if err != nil || record.Country.IsoCode == "" {
-		g.cache.Store(key, "XX")
+	country := iploc.Country(ip)
+	if country == "" {
 		return "XX"
 	}
-
-	g.cache.Store(key, record.Country.IsoCode)
-	return record.Country.IsoCode
-}
-
-// Close releases the GeoIP database resources.
-func (g *GeoIPResolver) Close() {
-	if g != nil && g.db != nil {
-		g.db.Close()
-	}
+	return country
 }

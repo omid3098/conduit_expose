@@ -243,20 +243,8 @@ do_install() {
     fi
     log_success "Source downloaded"
 
-    # --- MaxMind GeoIP (optional) ---
-    local maxmind_key=""
-    echo ""
-    if confirm "$(echo -e "${CYAN}Enable GeoIP country resolution? (requires free MaxMind license key)${NC}")" "N"; then
-        prompt "$(echo -e "${CYAN}MaxMind license key${NC}")" maxmind_key ""
-    fi
-
-    local build_args=""
-    if [ -n "$maxmind_key" ]; then
-        build_args="--build-arg MAXMIND_LICENSE_KEY=${maxmind_key}"
-    fi
-
     log_info "Building Docker image (this may take a minute)..."
-    docker build -t "$IMAGE_NAME" $build_args "$tmp_dir/src" --quiet
+    docker build -t "$IMAGE_NAME" "$tmp_dir/src" --quiet
     log_success "Docker image built"
 
     # --- Deploy container ---

@@ -15,9 +15,8 @@ const (
 	defaultDockerTimeout  = 5 * time.Second
 	defaultMetricsTimeout = 3 * time.Second
 	defaultMaxWorkers     = 10
-	defaultHostProcPath   = "/host/proc"
-	defaultHostRootPath   = "/host/root"
-	defaultGeoIPPath      = "/data/GeoLite2-Country.mmdb"
+	defaultHostProcPath = "/host/proc"
+	defaultHostRootPath = "/host/root"
 
 	conduitImage = "ghcr.io/psiphon-inc/conduit/cli"
 	conduitName  = "conduit"
@@ -33,9 +32,8 @@ type Config struct {
 	DockerTimeout  time.Duration
 	MetricsTimeout time.Duration
 	MaxWorkers     int
-	HostProcPath   string
-	HostRootPath   string
-	GeoIPPath      string
+	HostProcPath string
+	HostRootPath string
 }
 
 func loadConfig() *Config {
@@ -48,9 +46,8 @@ func loadConfig() *Config {
 		DockerTimeout:  defaultDockerTimeout,
 		MetricsTimeout: defaultMetricsTimeout,
 		MaxWorkers:     defaultMaxWorkers,
-		HostProcPath:   envOrDefault("CONDUIT_HOST_PROC", defaultHostProcPath),
-		HostRootPath:   envOrDefault("CONDUIT_HOST_ROOT", defaultHostRootPath),
-		GeoIPPath:      envOrDefault("CONDUIT_GEOIP_PATH", defaultGeoIPPath),
+		HostProcPath: envOrDefault("CONDUIT_HOST_PROC", defaultHostProcPath),
+		HostRootPath: envOrDefault("CONDUIT_HOST_ROOT", defaultHostRootPath),
 	}
 }
 
