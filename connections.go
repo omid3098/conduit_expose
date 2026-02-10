@@ -61,7 +61,9 @@ func collectContainerConnections(hostProcPath string, pid int, geo *GeoIPResolve
 			ipStr := e.remoteIP.String()
 			uniqueIPs[ipStr] = struct{}{}
 
-			if geo != nil {
+			// Only count ESTABLISHED connections for country stats
+			// to match what Conduit Manager shows as "Active Clients"
+			if e.state == "01" && geo != nil {
 				country := geo.Lookup(e.remoteIP)
 				if country != "" {
 					countryCounts[country]++

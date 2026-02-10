@@ -164,8 +164,10 @@ func readLoadAvg(procPath string, m *SystemMetrics) {
 // readDisk is implemented in system_linux.go (uses syscall.Statfs).
 
 // readNetwork parses /proc/net/dev for host network throughput and errors.
+// Uses PID 1's network namespace to get host-level stats even when running
+// inside a container (/proc/net is per-namespace via /proc/self/net symlink).
 func readNetwork(procPath string, m *SystemMetrics) {
-	f, err := os.Open(fmt.Sprintf("%s/net/dev", procPath))
+	f, err := os.Open(fmt.Sprintf("%s/1/net/dev", procPath))
 	if err != nil {
 		return
 	}

@@ -13,7 +13,7 @@ const (
 	defaultMetricsPath    = "/metrics"
 	defaultPollInterval   = 15 * time.Second
 	defaultDockerTimeout  = 5 * time.Second
-	defaultMetricsTimeout = 3 * time.Second
+	defaultMetricsTimeout = 5 * time.Second
 	defaultMaxWorkers     = 10
 	defaultHostProcPath = "/host/proc"
 	defaultHostRootPath = "/host/root"

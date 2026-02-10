@@ -252,13 +252,14 @@ do_install() {
     docker run -d \
         --name "$CONTAINER_NAME" \
         --restart unless-stopped \
+        --network=host \
         --log-opt max-size=10m \
         --log-opt max-file=3 \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v /proc:/host/proc:ro \
         -v /:/host/root:ro \
         -e "CONDUIT_AUTH_SECRET=${secret}" \
-        -p "${port}:${INTERNAL_PORT}" \
+        -e "CONDUIT_LISTEN_ADDR=:${port}" \
         "$IMAGE_NAME" >/dev/null
 
     log_success "Container started"
@@ -386,11 +387,14 @@ cmd_update() {
     docker run -d \
         --name "$CONTAINER_NAME" \
         --restart unless-stopped \
+        --network=host \
         --log-opt max-size=10m \
         --log-opt max-file=3 \
         -v /var/run/docker.sock:/var/run/docker.sock \
+        -v /proc:/host/proc:ro \
+        -v /:/host/root:ro \
         -e "CONDUIT_AUTH_SECRET=${AUTH_SECRET}" \
-        -p "${PORT}:8081" \
+        -e "CONDUIT_LISTEN_ADDR=:${PORT}" \
         "$IMAGE_NAME" >/dev/null
 
     log_success "Updated and running on port ${PORT}"

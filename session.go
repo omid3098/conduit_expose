@@ -26,17 +26,22 @@ func NewSessionTracker() *SessionTracker {
 }
 
 // Update records a new sample. If cumulative traffic drops (counter reset),
-// the session is reset automatically.
-func (s *SessionTracker) Update(totalConnected int64, totalUpload, totalDownload float64) {
+// the session is reset automatically. uptimeSeconds is the conduit application
+// uptime from Prometheus, used to derive accurate session start time.
+func (s *SessionTracker) Update(totalConnected int64, totalUpload, totalDownload float64, uptimeSeconds float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Detect counter reset (container restart)
 	if totalUpload < s.lastUpload || totalDownload < s.lastDownload {
-		s.startTime = time.Now()
 		s.peakConns = 0
 		s.sampleCount = 0
 		s.connSum = 0
+	}
+
+	// Use conduit's own uptime for accurate session start time
+	if uptimeSeconds > 0 {
+		s.startTime = time.Now().Add(-time.Duration(uptimeSeconds * float64(time.Second)))
 	}
 
 	if totalConnected > s.peakConns {

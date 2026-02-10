@@ -115,15 +115,17 @@ type ContainerInfo struct {
 
 // StatusResponse is the top-level JSON response for GET /status.
 type StatusResponse struct {
-	ServerID         string             `json:"server_id"`
-	Timestamp        int64              `json:"timestamp"`
-	TotalContainers  int                `json:"total_containers"`
-	System           *SystemMetrics     `json:"system,omitempty"`
-	Settings         *ContainerSettings `json:"settings,omitempty"`
-	Session          *SessionInfo       `json:"session,omitempty"`
-	Connections      *ConnectionStats   `json:"connections,omitempty"`
-	ClientsByCountry []CountryStats     `json:"clients_by_country,omitempty"`
-	Containers       []ContainerInfo    `json:"containers"`
+	ServerID          string             `json:"server_id"`
+	Timestamp         int64              `json:"timestamp"`
+	TotalContainers   int                `json:"total_containers"`
+	ConnectedClients  int64              `json:"connected_clients"`
+	ConnectingClients int64              `json:"connecting_clients"`
+	System            *SystemMetrics     `json:"system,omitempty"`
+	Settings          *ContainerSettings `json:"settings,omitempty"`
+	Session           *SessionInfo       `json:"session,omitempty"`
+	Connections       *ConnectionStats   `json:"connections,omitempty"`
+	ClientsByCountry  []CountryStats     `json:"clients_by_country,omitempty"`
+	Containers        []ContainerInfo    `json:"containers"`
 }
 
 // ============================================================

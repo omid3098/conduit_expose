@@ -197,7 +197,9 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 	var allConnStats []*ConnectionStats
 	var allCountries [][]CountryStats
 	var totalConnected int64
+	var totalConnecting int64
 	var totalUpload, totalDownload float64
+	var maxUptimeSeconds float64
 	var aggSettings *ContainerSettings
 
 	for i, r := range results {
@@ -212,8 +214,12 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 
 		if r.info.AppMetrics != nil {
 			totalConnected += r.info.AppMetrics.ConnectedClients
+			totalConnecting += r.info.AppMetrics.ConnectingClients
 			totalUpload += r.info.AppMetrics.BytesUploaded
 			totalDownload += r.info.AppMetrics.BytesDownloaded
+			if r.info.AppMetrics.UptimeSeconds > maxUptimeSeconds {
+				maxUptimeSeconds = r.info.AppMetrics.UptimeSeconds
+			}
 		}
 
 		// Aggregate settings: take max of MaxClients and BandwidthLimitMbps, OR of AutoStart
@@ -243,18 +249,20 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 	mergedCountries := mergeCountryStats(allCountries)
 
 	// Update session tracker
-	session.Update(totalConnected, totalUpload, totalDownload)
+	session.Update(totalConnected, totalUpload, totalDownload, maxUptimeSeconds)
 
 	return &StatusResponse{
-		ServerID:         hostname,
-		Timestamp:        time.Now().Unix(),
-		TotalContainers:  len(containerInfos),
-		System:           systemMetrics,
-		Settings:         aggSettings,
-		Session:          session.Snapshot(),
-		Connections:      mergedConns,
-		ClientsByCountry: mergedCountries,
-		Containers:       containerInfos,
+		ServerID:          hostname,
+		Timestamp:         time.Now().Unix(),
+		TotalContainers:   len(containerInfos),
+		ConnectedClients:  totalConnected,
+		ConnectingClients: totalConnecting,
+		System:            systemMetrics,
+		Settings:          aggSettings,
+		Session:           session.Snapshot(),
+		Connections:       mergedConns,
+		ClientsByCountry:  mergedCountries,
+		Containers:        containerInfos,
 	}
 }
 
