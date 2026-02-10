@@ -36,38 +36,54 @@ func collectContainerConnections(hostProcPath string, pid int, geo *GeoIPResolve
 	countryCounts := make(map[string]int)
 
 	// Parse both IPv4 and IPv6 TCP connection tables
+	var allEntries []tcpEntry
 	for _, proto := range []string{"tcp", "tcp6"} {
 		path := fmt.Sprintf("%s/%d/net/%s", hostProcPath, pid, proto)
 		entries, err := parseProcNetTCP(path, proto == "tcp6")
 		if err != nil {
 			continue
 		}
+		allEntries = append(allEntries, entries...)
+	}
 
-		for _, e := range entries {
-			// Skip listening sockets and loopback
-			if e.remotePort == 0 {
+	// Pass 1: discover ports the container is listening on.
+	// Only inbound connections (to these ports) are actual client connections.
+	listenPorts := make(map[uint16]struct{})
+	for _, e := range allEntries {
+		if e.state == "0A" { // LISTEN
+			listenPorts[e.localPort] = struct{}{}
+		}
+	}
+
+	// Pass 2: count only connections whose local port matches a LISTEN port
+	// (filters out outbound connections which use ephemeral local ports)
+	for _, e := range allEntries {
+		if e.remotePort == 0 || e.remoteIP.IsLoopback() {
+			continue
+		}
+
+		// If we found LISTEN ports, only count inbound connections
+		if len(listenPorts) > 0 {
+			if _, ok := listenPorts[e.localPort]; !ok {
 				continue
 			}
-			if e.remoteIP.IsLoopback() {
-				continue
-			}
+		}
 
-			stats.Total++
+		stats.Total++
 
-			if stateName, ok := tcpStates[e.state]; ok {
-				stats.States[stateName]++
-			}
+		if stateName, ok := tcpStates[e.state]; ok {
+			stats.States[stateName]++
+		}
 
-			ipStr := e.remoteIP.String()
-			uniqueIPs[ipStr] = struct{}{}
+		ipStr := e.remoteIP.String()
+		uniqueIPs[ipStr] = struct{}{}
 
-			// Only count ESTABLISHED connections for country stats
-			// to match what Conduit Manager shows as "Active Clients"
-			if e.state == "01" && geo != nil {
-				country := geo.Lookup(e.remoteIP)
-				if country != "" {
-					countryCounts[country]++
-				}
+		// Only count ESTABLISHED connections for country stats
+		// to match what Conduit Manager shows as "Active Clients"
+		if e.state == "01" && geo != nil {
+			country := geo.Lookup(e.remoteIP)
+			if country != "" {
+				countryCounts[country]++
 			}
 		}
 	}
@@ -88,6 +104,7 @@ func collectContainerConnections(hostProcPath string, pid int, geo *GeoIPResolve
 
 // tcpEntry represents a single parsed line from /proc/net/tcp{,6}.
 type tcpEntry struct {
+	localPort  uint16
 	remoteIP   net.IP
 	remotePort uint16
 	state      string // hex state code, e.g. "01"
@@ -121,8 +138,14 @@ func parseProcNetTCP(path string, isIPv6 bool) ([]tcpEntry, error) {
 			continue
 		}
 
-		remAddr := fields[2]  // e.g. "0100007F:0050" or hex IPv6
-		state := fields[3]    // e.g. "01"
+		localAddr := fields[1] // e.g. "0100007F:1F90"
+		remAddr := fields[2]   // e.g. "0100007F:0050" or hex IPv6
+		state := fields[3]     // e.g. "01"
+
+		_, localPort, err := parseHexAddr(localAddr, isIPv6)
+		if err != nil {
+			continue
+		}
 
 		ip, port, err := parseHexAddr(remAddr, isIPv6)
 		if err != nil {
@@ -130,6 +153,7 @@ func parseProcNetTCP(path string, isIPv6 bool) ([]tcpEntry, error) {
 		}
 
 		entries = append(entries, tcpEntry{
+			localPort:  localPort,
 			remoteIP:   ip,
 			remotePort: port,
 			state:      state,
