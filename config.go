@@ -12,7 +12,8 @@ const (
 	defaultDockerTimeout = 5 * time.Second
 	defaultMaxWorkers    = 10
 	defaultHostProcPath  = "/host/proc"
-	defaultHostRootPath  = "/host/root"
+	defaultHostRootPath      = "/host/root"
+	defaultConduitInstallDir = "/opt/conduit"
 
 	conduitImage = "ghcr.io/psiphon-inc/conduit/cli"
 	conduitName  = "conduit"
@@ -25,8 +26,9 @@ type Config struct {
 	PollInterval time.Duration
 	DockerTimeout time.Duration
 	MaxWorkers   int
-	HostProcPath string
-	HostRootPath string
+	HostProcPath      string
+	HostRootPath      string
+	ConduitInstallDir string
 }
 
 func loadConfig() *Config {
@@ -37,7 +39,8 @@ func loadConfig() *Config {
 		DockerTimeout: defaultDockerTimeout,
 		MaxWorkers:   defaultMaxWorkers,
 		HostProcPath: envOrDefault("CONDUIT_HOST_PROC", defaultHostProcPath),
-		HostRootPath: envOrDefault("CONDUIT_HOST_ROOT", defaultHostRootPath),
+		HostRootPath:      envOrDefault("CONDUIT_HOST_ROOT", defaultHostRootPath),
+		ConduitInstallDir: envOrDefault("CONDUIT_INSTALL_DIR", defaultConduitInstallDir),
 	}
 }
 
@@ -46,6 +49,18 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// CMDataPath returns the full host-accessible path to the Conduit Manager install directory.
+// e.g., "/host/root/opt/conduit"
+func (c *Config) CMDataPath() string {
+	return c.HostRootPath + c.ConduitInstallDir
+}
+
+// CMTrafficStatsPath returns the path to the traffic_stats directory.
+// e.g., "/host/root/opt/conduit/traffic_stats"
+func (c *Config) CMTrafficStatsPath() string {
+	return c.CMDataPath() + "/traffic_stats"
 }
 
 func envDurationOrDefault(key string, fallback time.Duration) time.Duration {

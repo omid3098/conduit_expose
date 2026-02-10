@@ -54,6 +54,23 @@ func (s *SessionTracker) Update(totalConnected int64, totalUpload, totalDownload
 	s.lastDownload = totalDownload
 }
 
+// UpdateFromCM updates session data with Conduit Manager's authoritative values.
+// CM's peak_connections file holds the true peak since container start.
+func (s *SessionTracker) UpdateFromCM(cmPeak int64, cmStartTime time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// CM peak is authoritative (based on all 5-minute samples, not just our poll interval)
+	if cmPeak > s.peakConns {
+		s.peakConns = cmPeak
+	}
+
+	// CM start time is authoritative if available
+	if !cmStartTime.IsZero() {
+		s.startTime = cmStartTime
+	}
+}
+
 // Snapshot returns the current session info.
 func (s *SessionTracker) Snapshot() *SessionInfo {
 	s.mu.Lock()

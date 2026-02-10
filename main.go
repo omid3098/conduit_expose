@@ -37,9 +37,6 @@ func main() {
 	}
 	log.Println("Connected to Docker daemon")
 
-	// Initialize GeoIP resolver (embedded data, always available)
-	geo := NewGeoIPResolver()
-
 	// Initialize session tracker
 	session := NewSessionTracker()
 
@@ -48,7 +45,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go pollLoop(ctx, cli, cfg, cache, geo, session)
+	go pollLoop(ctx, cli, cfg, cache, session)
 
 	// Set up HTTP routes
 	mux := http.NewServeMux()
@@ -91,8 +88,8 @@ func main() {
 // Polling Engine
 // ============================================================
 
-func pollLoop(ctx context.Context, cli *client.Client, cfg *Config, cache *StatusCache, geo *GeoIPResolver, session *SessionTracker) {
-	cache.Set(collectAll(ctx, cli, cfg, geo, session))
+func pollLoop(ctx context.Context, cli *client.Client, cfg *Config, cache *StatusCache, session *SessionTracker) {
+	cache.Set(collectAll(ctx, cli, cfg, session))
 	log.Printf("Initial data collection complete (%d containers)", cache.Get().TotalContainers)
 
 	ticker := time.NewTicker(cfg.PollInterval)
@@ -101,7 +98,7 @@ func pollLoop(ctx context.Context, cli *client.Client, cfg *Config, cache *Statu
 	for {
 		select {
 		case <-ticker.C:
-			cache.Set(collectAll(ctx, cli, cfg, geo, session))
+			cache.Set(collectAll(ctx, cli, cfg, session))
 		case <-ctx.Done():
 			return
 		}
@@ -109,13 +106,19 @@ func pollLoop(ctx context.Context, cli *client.Client, cfg *Config, cache *Statu
 }
 
 // collectAll performs a full collection cycle.
-func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIPResolver, session *SessionTracker) *StatusResponse {
+func collectAll(ctx context.Context, cli *client.Client, cfg *Config, session *SessionTracker) *StatusResponse {
 	hostname, _ := os.Hostname()
 
 	// 1. System-level metrics
 	systemMetrics := collectSystemMetrics(cfg)
 
-	// 2. Discover containers (with self-filtering)
+	// 2. Read Conduit Manager data files (country, traffic, settings, peak)
+	cmData := ReadCMData(cfg)
+	if !cmData.Available {
+		log.Println("WARN: Conduit Manager data not available at", cfg.CMDataPath())
+	}
+
+	// 3. Discover containers (with self-filtering)
 	containers, err := discoverContainers(ctx, cli)
 	if err != nil {
 		log.Printf("WARN: container discovery failed: %v", err)
@@ -125,14 +128,15 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 			TotalContainers: 0,
 			System:          systemMetrics,
 			Containers:      []ContainerInfo{},
+			CMAvailable:     cmData.Available,
 		}
 	}
 
-	// 3. Parallel per-container collection
+	// 4. Parallel per-container collection
 	type perContainerResult struct {
-		info     ContainerInfo
-		connStat *ConnectionStats
-		countries []CountryStats
+		info      ContainerInfo
+		connStat  *ConnectionStats
+		autoStart bool
 	}
 
 	results := make([]perContainerResult, len(containers))
@@ -148,10 +152,9 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 
 			info := collectContainerStats(ctx, cli, c, cfg)
 			var connStat *ConnectionStats
-			var countries []CountryStats
+			var autoStart bool
 
 			if info.Status == "running" {
-				// Inspect container (needed for health, PID, uptime, settings)
 				inspect, inspectErr := cli.ContainerInspect(ctx, c.ID)
 				if inspectErr != nil {
 					log.Printf("WARN: cannot inspect %s: %v", info.Name, inspectErr)
@@ -161,24 +164,19 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 					if metricsErr != nil {
 						log.Printf("WARN: logs unavailable for %s: %v", info.Name, metricsErr)
 					} else if appMetrics != nil {
-						// Use docker inspect's StartedAt for uptime (more reliable)
 						appMetrics.UptimeSeconds = containerUptimeSeconds(inspect)
 						info.AppMetrics = appMetrics
 					}
 
-					// Settings from container env vars + restart policy
-					settings := extractContainerSettings(inspect)
-					if settings != nil {
-						settings.AutoStart = extractAutoStart(inspect)
-						info.Settings = settings
-					}
+					// AutoStart from Docker restart policy
+					autoStart = extractAutoStart(inspect)
 
 					// Container health from Docker inspect + /proc
 					info.Health = collectContainerHealth(inspect, cfg.HostProcPath)
 
-					// TCP connections from /proc/<pid>/net/tcp
+					// TCP connection states from /proc/<pid>/net/tcp
 					if inspect.State != nil && inspect.State.Pid > 0 {
-						connStat, countries = collectContainerConnections(cfg.HostProcPath, inspect.State.Pid, geo)
+						connStat = collectContainerConnections(cfg.HostProcPath, inspect.State.Pid)
 					}
 				}
 			}
@@ -186,30 +184,26 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 			results[idx] = perContainerResult{
 				info:      info,
 				connStat:  connStat,
-				countries: countries,
+				autoStart: autoStart,
 			}
 		}(i, ctr)
 	}
 	wg.Wait()
 
-	// 4. Aggregate results
+	// 5. Aggregate results
 	containerInfos := make([]ContainerInfo, len(results))
 	var allConnStats []*ConnectionStats
-	var allCountries [][]CountryStats
 	var totalConnected int64
 	var totalConnecting int64
 	var totalUpload, totalDownload float64
 	var maxUptimeSeconds float64
-	var aggSettings *ContainerSettings
+	var anyAutoStart bool
 
 	for i, r := range results {
 		containerInfos[i] = r.info
 
 		if r.connStat != nil {
 			allConnStats = append(allConnStats, r.connStat)
-		}
-		if r.countries != nil {
-			allCountries = append(allCountries, r.countries)
 		}
 
 		if r.info.AppMetrics != nil {
@@ -222,34 +216,51 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 			}
 		}
 
-		// Aggregate settings: take max of MaxClients and BandwidthLimitMbps, OR of AutoStart
-		if r.info.Settings != nil {
-			if aggSettings == nil {
-				s := *r.info.Settings
-				aggSettings = &s
-			} else {
-				if r.info.Settings.MaxClients > aggSettings.MaxClients {
-					aggSettings.MaxClients = r.info.Settings.MaxClients
-				}
-				if r.info.Settings.BandwidthLimitMbps > aggSettings.BandwidthLimitMbps {
-					aggSettings.BandwidthLimitMbps = r.info.Settings.BandwidthLimitMbps
-				}
-				if r.info.Settings.AutoStart {
-					aggSettings.AutoStart = true
-				}
-			}
+		if r.autoStart {
+			anyAutoStart = true
 		}
 	}
 
-	// Merge connections and countries across containers
+	// Merge TCP connection stats across containers
 	mergedConns := mergeConnectionStats(allConnStats)
 	if mergedConns.Total == 0 {
 		mergedConns = nil
 	}
-	mergedCountries := mergeCountryStats(allCountries)
 
-	// Update session tracker
+	// 6. Build settings from CM data + Docker auto-start
+	var aggSettings *ContainerSettings
+	if cmData.Available && cmData.Settings != nil {
+		aggSettings = &ContainerSettings{
+			MaxClients:         cmData.Settings.MaxClients,
+			BandwidthLimitMbps: cmData.Settings.Bandwidth,
+			AutoStart:          anyAutoStart,
+			ContainerCount:     cmData.Settings.ContainerCount,
+			SnowflakeEnabled:   cmData.Settings.SnowflakeEnabled,
+			SnowflakeCount:     cmData.Settings.SnowflakeCount,
+		}
+	} else if anyAutoStart {
+		aggSettings = &ContainerSettings{AutoStart: true}
+	}
+
+	// 7. Country data from CM files
+	var clientsByCountry []CountryStats
+	var trafficByCountry []CountryTrafficStats
+	if cmData.Available {
+		clientsByCountry = cmData.ClientsByCountry
+		trafficByCountry = cmData.TrafficByCountry
+	}
+
+	// 8. Update session tracker
 	session.Update(totalConnected, totalUpload, totalDownload, maxUptimeSeconds)
+	if cmData.Available {
+		session.UpdateFromCM(cmData.PeakConnections, cmData.TrackerStart)
+	}
+
+	// 9. Collect snowflake metrics if enabled
+	var snowflake *SnowflakeMetrics
+	if cmData.Available && cmData.Settings != nil && cmData.Settings.SnowflakeEnabled {
+		snowflake = collectSnowflakeMetrics(ctx, cfg)
+	}
 
 	return &StatusResponse{
 		ServerID:          hostname,
@@ -261,8 +272,11 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 		Settings:          aggSettings,
 		Session:           session.Snapshot(),
 		Connections:       mergedConns,
-		ClientsByCountry:  mergedCountries,
+		ClientsByCountry:  clientsByCountry,
+		TrafficByCountry:  trafficByCountry,
+		Snowflake:         snowflake,
 		Containers:        containerInfos,
+		CMAvailable:       cmData.Available,
 	}
 }
 

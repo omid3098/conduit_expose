@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"sort"
 	"strings"
 )
 
@@ -26,14 +25,13 @@ var tcpStates = map[string]string{
 }
 
 // collectContainerConnections reads TCP connections from a container's network namespace
-// via /proc/<pid>/net/tcp and /proc/<pid>/net/tcp6, then aggregates connection states
-// and resolves remote IPs to countries.
-func collectContainerConnections(hostProcPath string, pid int, geo *GeoIPResolver) (*ConnectionStats, []CountryStats) {
+// via /proc/<pid>/net/tcp and /proc/<pid>/net/tcp6, then aggregates connection states.
+// Country data is now sourced from Conduit Manager's data files (see cmdata.go).
+func collectContainerConnections(hostProcPath string, pid int) *ConnectionStats {
 	stats := &ConnectionStats{
 		States: make(map[string]int),
 	}
 	uniqueIPs := make(map[string]struct{})
-	countryCounts := make(map[string]int)
 
 	// Parse both IPv4 and IPv6 TCP connection tables
 	var allEntries []tcpEntry
@@ -77,29 +75,11 @@ func collectContainerConnections(hostProcPath string, pid int, geo *GeoIPResolve
 
 		ipStr := e.remoteIP.String()
 		uniqueIPs[ipStr] = struct{}{}
-
-		// Only count ESTABLISHED connections for country stats
-		// to match what Conduit Manager shows as "Active Clients"
-		if e.state == "01" && geo != nil {
-			country := geo.Lookup(e.remoteIP)
-			if country != "" {
-				countryCounts[country]++
-			}
-		}
 	}
 
 	stats.UniqueIPs = len(uniqueIPs)
 
-	// Convert country map to sorted slice
-	var countries []CountryStats
-	for code, count := range countryCounts {
-		countries = append(countries, CountryStats{Country: code, Connections: count})
-	}
-	sort.Slice(countries, func(i, j int) bool {
-		return countries[i].Connections > countries[j].Connections
-	})
-
-	return stats, countries
+	return stats
 }
 
 // tcpEntry represents a single parsed line from /proc/net/tcp{,6}.
@@ -217,7 +197,6 @@ func mergeConnectionStats(all []*ConnectionStats) *ConnectionStats {
 	merged := &ConnectionStats{
 		States: make(map[string]int),
 	}
-	seenIPs := make(map[string]struct{})
 
 	for _, s := range all {
 		if s == nil {
@@ -231,27 +210,6 @@ func mergeConnectionStats(all []*ConnectionStats) *ConnectionStats {
 		// since containers have separate network namespaces
 		merged.UniqueIPs += s.UniqueIPs
 	}
-	_ = seenIPs
 
 	return merged
-}
-
-// mergeCountryStats merges country stats from multiple containers.
-func mergeCountryStats(all [][]CountryStats) []CountryStats {
-	counts := make(map[string]int)
-	for _, list := range all {
-		for _, cs := range list {
-			counts[cs.Country] += cs.Connections
-		}
-	}
-
-	var result []CountryStats
-	for code, count := range counts {
-		result = append(result, CountryStats{Country: code, Connections: count})
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Connections > result[j].Connections
-	})
-
-	return result
 }

@@ -9,7 +9,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -140,41 +139,6 @@ func containerUptimeSeconds(inspect types.ContainerJSON) float64 {
 		return 0
 	}
 	return time.Since(started).Seconds()
-}
-
-// extractContainerSettings reads settings from container environment variables.
-func extractContainerSettings(inspect types.ContainerJSON) *ContainerSettings {
-	if inspect.Config == nil {
-		return nil
-	}
-
-	settings := &ContainerSettings{}
-	found := false
-
-	for _, env := range inspect.Config.Env {
-		parts := strings.SplitN(env, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key, val := parts[0], parts[1]
-		switch key {
-		case "MAX_CLIENTS":
-			if v, err := strconv.Atoi(val); err == nil {
-				settings.MaxClients = v
-				found = true
-			}
-		case "BANDWIDTH_LIMIT":
-			if v, err := strconv.ParseFloat(val, 64); err == nil {
-				settings.BandwidthLimitMbps = v
-				found = true
-			}
-		}
-	}
-
-	if !found {
-		return nil
-	}
-	return settings
 }
 
 // collectContainerStats gathers Docker stats for a single container.
