@@ -1,97 +1,156 @@
 package main
 
 import (
-	"bufio"
-	"io"
 	"strconv"
 	"strings"
 )
 
-// parsePrometheusMetrics reads Prometheus exposition format text and extracts
-// conduit_* metrics and settings gauges.
-func parsePrometheusMetrics(body io.Reader) (*AppMetrics, *ContainerSettings) {
+// parseStatsLine parses a Psiphon conduit [STATS] log line into AppMetrics.
+// Format: "[STATS] Connecting: 3 Connected: 12 Up: 1.50 GB Down: 3.20 GB Uptime: 2h 30m"
+func parseStatsLine(line string) *AppMetrics {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return nil
+	}
+
 	metrics := &AppMetrics{}
-	settings := &ContainerSettings{}
-	scanner := bufio.NewScanner(body)
+	parsed := false
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for i := 0; i < len(fields); i++ {
+		switch fields[i] {
+		case "Connecting:":
+			if i+1 < len(fields) {
+				if v, err := strconv.ParseInt(fields[i+1], 10, 64); err == nil {
+					metrics.ConnectingClients = v
+					parsed = true
+					i++
+				}
+			}
+		case "Connected:":
+			if i+1 < len(fields) {
+				if v, err := strconv.ParseInt(fields[i+1], 10, 64); err == nil {
+					metrics.ConnectedClients = v
+					parsed = true
+					i++
+				}
+			}
+		case "Up:":
+			// Read value + unit tokens until next keyword or end
+			val, unit, advance := readTrafficTokens(fields, i+1)
+			if val != "" {
+				metrics.BytesUploaded = parseTrafficValue(val, unit)
+				parsed = true
+			}
+			i += advance
+		case "Down:":
+			val, unit, advance := readTrafficTokens(fields, i+1)
+			if val != "" {
+				metrics.BytesDownloaded = parseTrafficValue(val, unit)
+				parsed = true
+			}
+			i += advance
+		case "Uptime:":
+			// Collect remaining tokens that look like duration parts
+			var parts []string
+			for j := i + 1; j < len(fields); j++ {
+				if isStatsKeyword(fields[j]) {
+					break
+				}
+				parts = append(parts, fields[j])
+			}
+			if len(parts) > 0 {
+				metrics.UptimeSeconds = parseUptimeDuration(parts)
+				parsed = true
+			}
+			i += len(parts)
+		}
+	}
 
-		if line == "" || strings.HasPrefix(line, "#") {
+	if !parsed {
+		return nil
+	}
+
+	metrics.IsLive = true
+	return metrics
+}
+
+// isStatsKeyword checks if a token is one of the [STATS] line keywords.
+func isStatsKeyword(s string) bool {
+	switch s {
+	case "Connecting:", "Connected:", "Up:", "Down:", "Uptime:", "[STATS]":
+		return true
+	}
+	return false
+}
+
+// readTrafficTokens reads a value and optional unit starting at fields[start].
+// Returns (value, unit, tokensConsumed). Stops at next keyword or end.
+func readTrafficTokens(fields []string, start int) (string, string, int) {
+	if start >= len(fields) {
+		return "", "", 0
+	}
+
+	val := fields[start]
+	consumed := 1
+
+	// Check if next token is a unit (not a keyword and not parseable as a number)
+	if start+1 < len(fields) && !isStatsKeyword(fields[start+1]) {
+		if _, err := strconv.ParseFloat(fields[start+1], 64); err != nil {
+			return val, fields[start+1], 2
+		}
+	}
+
+	return val, "B", consumed
+}
+
+// parseTrafficValue converts a value string and unit string to bytes.
+func parseTrafficValue(valStr, unitStr string) float64 {
+	val, err := strconv.ParseFloat(valStr, 64)
+	if err != nil {
+		return 0
+	}
+
+	unit := strings.ToUpper(strings.TrimSpace(unitStr))
+	switch {
+	case strings.HasPrefix(unit, "TB"):
+		return val * 1099511627776
+	case strings.HasPrefix(unit, "GB"):
+		return val * 1073741824
+	case strings.HasPrefix(unit, "MB"):
+		return val * 1048576
+	case strings.HasPrefix(unit, "KB"):
+		return val * 1024
+	default:
+		return val
+	}
+}
+
+// parseUptimeDuration converts duration parts like ["2h", "30m"] or ["1d", "5h", "30m"] to seconds.
+func parseUptimeDuration(parts []string) float64 {
+	var total float64
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if len(part) < 2 {
 			continue
 		}
 
-		name, rest := splitMetricLine(line)
+		suffix := part[len(part)-1]
+		numStr := part[:len(part)-1]
+		val, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			continue
+		}
 
-		switch name {
-		case "conduit_connected_clients":
-			if val, err := parseMetricValue(rest); err == nil {
-				metrics.ConnectedClients = int64(val)
-			}
-		case "conduit_connecting_clients":
-			if val, err := parseMetricValue(rest); err == nil {
-				metrics.ConnectingClients = int64(val)
-			}
-		case "conduit_announcing":
-			if val, err := parseMetricValue(rest); err == nil {
-				metrics.Announcing = int64(val)
-			}
-		case "conduit_is_live":
-			if val, err := parseMetricValue(rest); err == nil {
-				metrics.IsLive = val >= 1
-			}
-		case "conduit_bytes_uploaded":
-			if val, err := parseMetricValue(rest); err == nil {
-				metrics.BytesUploaded = val
-			}
-		case "conduit_bytes_downloaded":
-			if val, err := parseMetricValue(rest); err == nil {
-				metrics.BytesDownloaded = val
-			}
-		case "conduit_uptime_seconds":
-			if val, err := parseMetricValue(rest); err == nil {
-				metrics.UptimeSeconds = val
-			}
-		case "conduit_idle_seconds":
-			if val, err := parseMetricValue(rest); err == nil {
-				metrics.IdleSeconds = val
-			}
-		case "conduit_max_clients":
-			if val, err := parseMetricValue(rest); err == nil {
-				settings.MaxClients = int(val)
-			}
-		case "conduit_bandwidth_limit_bytes_per_second":
-			if val, err := parseMetricValue(rest); err == nil {
-				// Convert bytes/sec to Mbps: val * 8 / 1_000_000
-				settings.BandwidthLimitMbps = val * 8 / 1_000_000
-			}
+		switch suffix {
+		case 'd':
+			total += val * 86400
+		case 'h':
+			total += val * 3600
+		case 'm':
+			total += val * 60
+		case 's':
+			total += val
 		}
 	}
-
-	return metrics, settings
-}
-
-// splitMetricLine splits "metric_name{labels} value" into name and the remainder.
-func splitMetricLine(line string) (string, string) {
-	if idx := strings.IndexByte(line, '{'); idx != -1 {
-		return line[:idx], line[idx:]
-	}
-	if idx := strings.IndexByte(line, ' '); idx != -1 {
-		return line[:idx], line[idx:]
-	}
-	return line, ""
-}
-
-// parseMetricValue extracts the float64 value from a string like " 42.5" or " 42.5 1625000000000".
-func parseMetricValue(s string) (float64, error) {
-	// Strip labels if present: "{...} value" → " value"
-	if idx := strings.IndexByte(s, '}'); idx != -1 {
-		s = s[idx+1:]
-	}
-	s = strings.TrimSpace(s)
-	// Value may be followed by an optional timestamp; take just the first token
-	if idx := strings.IndexByte(s, ' '); idx != -1 {
-		s = s[:idx]
-	}
-	return strconv.ParseFloat(s, 64)
+	return total
 }

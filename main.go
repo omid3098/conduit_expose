@@ -151,26 +151,26 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, geo *GeoIP
 			var countries []CountryStats
 
 			if info.Status == "running" {
-				// Inspect container (needed for IP, health, PID)
+				// Inspect container (needed for health, PID, uptime, settings)
 				inspect, inspectErr := cli.ContainerInspect(ctx, c.ID)
 				if inspectErr != nil {
 					log.Printf("WARN: cannot inspect %s: %v", info.Name, inspectErr)
 				} else {
-					// App metrics + settings from Prometheus
-					ip, ipErr := getContainerIP(ctx, cli, inspect)
-					if ipErr != nil {
-						log.Printf("WARN: cannot get IP for %s: %v", info.Name, ipErr)
-					} else {
-						appMetrics, settings, metricsErr := fetchAppMetrics(ip, cfg)
-						if metricsErr != nil {
-							log.Printf("WARN: metrics unavailable for %s: %v", info.Name, metricsErr)
-						} else {
-							info.AppMetrics = appMetrics
-							if settings != nil {
-								settings.AutoStart = extractAutoStart(inspect)
-								info.Settings = settings
-							}
-						}
+					// App metrics from container logs ([STATS] lines)
+					appMetrics, metricsErr := fetchAppMetricsFromLogs(ctx, cli, c.ID, cfg)
+					if metricsErr != nil {
+						log.Printf("WARN: logs unavailable for %s: %v", info.Name, metricsErr)
+					} else if appMetrics != nil {
+						// Use docker inspect's StartedAt for uptime (more reliable)
+						appMetrics.UptimeSeconds = containerUptimeSeconds(inspect)
+						info.AppMetrics = appMetrics
+					}
+
+					// Settings from container env vars + restart policy
+					settings := extractContainerSettings(inspect)
+					if settings != nil {
+						settings.AutoStart = extractAutoStart(inspect)
+						info.Settings = settings
 					}
 
 					// Container health from Docker inspect + /proc

@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
-	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,22 +77,104 @@ func containerName(c types.Container) string {
 	return ""
 }
 
-// getContainerIP retrieves the first non-empty IP address from a container's networks.
-func getContainerIP(ctx context.Context, cli *client.Client, inspect types.ContainerJSON) (string, error) {
-	// If host network mode, the container shares the host's network stack
-	if inspect.HostConfig != nil && inspect.HostConfig.NetworkMode == "host" {
-		return "127.0.0.1", nil
-	}
+// fetchAppMetricsFromLogs reads a container's recent logs via the Docker API,
+// finds the last [STATS] line, and parses it for app-level metrics.
+func fetchAppMetricsFromLogs(ctx context.Context, cli *client.Client, containerID string, cfg *Config) (*AppMetrics, error) {
+	logsCtx, cancel := context.WithTimeout(ctx, cfg.DockerTimeout)
+	defer cancel()
 
-	if inspect.NetworkSettings != nil {
-		for _, net := range inspect.NetworkSettings.Networks {
-			if net.IPAddress != "" {
-				return net.IPAddress, nil
+	reader, err := cli.ContainerLogs(logsCtx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "200",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading container logs: %w", err)
+	}
+	defer reader.Close()
+
+	// Docker multiplexed stream has 8-byte header per frame.
+	// Read all content, stripping headers.
+	var lastStatsLine string
+	br := bufio.NewReader(reader)
+	for {
+		// Read 8-byte header: [stream_type(1), 0, 0, 0, size(4)]
+		header := make([]byte, 8)
+		_, err := io.ReadFull(br, header)
+		if err != nil {
+			break
+		}
+		frameSize := int(header[4])<<24 | int(header[5])<<16 | int(header[6])<<8 | int(header[7])
+		if frameSize <= 0 {
+			continue
+		}
+		frame := make([]byte, frameSize)
+		_, err = io.ReadFull(br, frame)
+		if err != nil {
+			break
+		}
+
+		// Frame may contain multiple lines
+		for _, line := range strings.Split(string(frame), "\n") {
+			if strings.Contains(line, "[STATS]") {
+				lastStatsLine = line
 			}
 		}
 	}
 
-	return "", fmt.Errorf("no IP address found for container %s", inspect.ID[:12])
+	if lastStatsLine == "" {
+		return nil, nil
+	}
+
+	metrics := parseStatsLine(lastStatsLine)
+	return metrics, nil
+}
+
+// containerUptimeSeconds computes seconds since container started from inspect data.
+func containerUptimeSeconds(inspect types.ContainerJSON) float64 {
+	if inspect.State == nil || inspect.State.StartedAt == "" {
+		return 0
+	}
+	started, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
+	if err != nil {
+		return 0
+	}
+	return time.Since(started).Seconds()
+}
+
+// extractContainerSettings reads settings from container environment variables.
+func extractContainerSettings(inspect types.ContainerJSON) *ContainerSettings {
+	if inspect.Config == nil {
+		return nil
+	}
+
+	settings := &ContainerSettings{}
+	found := false
+
+	for _, env := range inspect.Config.Env {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, val := parts[0], parts[1]
+		switch key {
+		case "MAX_CLIENTS":
+			if v, err := strconv.Atoi(val); err == nil {
+				settings.MaxClients = v
+				found = true
+			}
+		case "BANDWIDTH_LIMIT":
+			if v, err := strconv.ParseFloat(val, 64); err == nil {
+				settings.BandwidthLimitMbps = v
+				found = true
+			}
+		}
+	}
+
+	if !found {
+		return nil
+	}
+	return settings
 }
 
 // collectContainerStats gathers Docker stats for a single container.
@@ -201,21 +284,3 @@ func extractAutoStart(inspect types.ContainerJSON) bool {
 	return policy == "always" || policy == "unless-stopped"
 }
 
-// fetchAppMetrics queries the Prometheus endpoint inside a container and parses the response.
-func fetchAppMetrics(containerIP string, cfg *Config) (*AppMetrics, *ContainerSettings, error) {
-	url := fmt.Sprintf("http://%s:%d%s", containerIP, cfg.MetricsPort, cfg.MetricsPath)
-
-	httpClient := &http.Client{Timeout: cfg.MetricsTimeout}
-	resp, err := httpClient.Get(url)
-	if err != nil {
-		return nil, nil, fmt.Errorf("fetching metrics from %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("metrics endpoint returned %d", resp.StatusCode)
-	}
-
-	appMetrics, settings := parsePrometheusMetrics(resp.Body)
-	return appMetrics, settings, nil
-}
