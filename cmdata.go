@@ -23,8 +23,9 @@ func ReadCMData(cfg *Config) *CMData {
 
 	statsPath := cfg.CMTrafficStatsPath()
 
-	// Country breakdown from cumulative_ips
-	data.ClientsByCountry = readCumulativeIPs(statsPath + "/cumulative_ips")
+	// Active clients by country from tracker_snapshot (current 15s capture window).
+	// NOT cumulative_ips which accumulates ALL IPs ever seen since tracker start.
+	data.ClientsByCountry = readTrackerSnapshot(statsPath + "/tracker_snapshot")
 
 	// Traffic by country from cumulative_data
 	data.TrafficByCountry = readCumulativeData(statsPath + "/cumulative_data")
@@ -69,9 +70,11 @@ func safeReadLines(path string) []string {
 	return lines
 }
 
-// readCumulativeIPs parses traffic_stats/cumulative_ips.
-// Format: COUNTRY|IP per line. Counts unique IPs per country.
-func readCumulativeIPs(path string) []CountryStats {
+// readTrackerSnapshot parses traffic_stats/tracker_snapshot.
+// Format: DIR|COUNTRY|BYTES|IP per line (e.g. "FROM|IR|102400|203.0.113.5").
+// Counts unique IPs per country from the most recent capture window.
+// This represents CURRENTLY active clients, matching what CM's TUI shows.
+func readTrackerSnapshot(path string) []CountryStats {
 	lines := safeReadLines(path)
 	if len(lines) == 0 {
 		return nil
@@ -84,12 +87,13 @@ func readCumulativeIPs(path string) []CountryStats {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 2)
-		if len(parts) != 2 {
+		parts := strings.Split(line, "|")
+		if len(parts) < 4 {
 			continue
 		}
-		country := strings.TrimSpace(parts[0])
-		ip := strings.TrimSpace(parts[1])
+		// DIR|COUNTRY|BYTES|IP
+		country := strings.TrimSpace(parts[1])
+		ip := strings.TrimSpace(parts[3])
 		if country == "" || ip == "" {
 			continue
 		}
