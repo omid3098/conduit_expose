@@ -11,7 +11,12 @@
       "Bash(go mod tidy:*)",
       "Bash(go build:*)",
       "Bash(go doc:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(findstr:*)",
+      "Bash(go get:*)",
+      "Bash(set:*)",
+      "Bash(set CGO_ENABLED=0:*)",
+      "Bash(cmd /c \"set GOOS=linux&& set CGO_ENABLED=0&& go build ./...\")"
     ]
   }
 }
