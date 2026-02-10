@@ -305,6 +305,9 @@ CONF
 install_ctl() {
     cat > "$CTL_PATH" <<'CTLSCRIPT'
 #!/usr/bin/env bash
+# The { ... } block forces bash to read the ENTIRE script into memory before
+# executing. This prevents parse errors when cmd_update overwrites this file.
+{
 set -euo pipefail
 
 CONFIG_FILE="/etc/conduit-expose/config"
@@ -460,6 +463,8 @@ case "${1:-}" in
         exit 1
         ;;
 esac
+exit 0
+}
 CTLSCRIPT
 
     chmod +x "$CTL_PATH"
