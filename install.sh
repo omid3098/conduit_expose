@@ -25,7 +25,7 @@ log_error()   { echo -e "${RED} [ERR]${NC} $*"; }
 # ============================================================
 # Constants
 # ============================================================
-REPO_URL="https://github.com/SamNet-dev/conduit-expose"
+REPO_URL="https://github.com/omid3098/conduit_expose"
 CONFIG_DIR="/etc/conduit-expose"
 CONFIG_FILE="${CONFIG_DIR}/config"
 CTL_PATH="/usr/local/bin/conduit-expose-ctl"
@@ -264,7 +264,7 @@ set -euo pipefail
 CONFIG_FILE="/etc/conduit-expose/config"
 CONTAINER_NAME="conduit-expose"
 IMAGE_NAME="conduit-expose"
-REPO_URL="https://github.com/SamNet-dev/conduit-expose"
+REPO_URL="https://github.com/omid3098/conduit_expose"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'
