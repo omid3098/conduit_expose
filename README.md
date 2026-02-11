@@ -4,6 +4,8 @@ A lightweight monitoring agent for [Psiphon Conduit](https://github.com/Psiphon-
 
 Built for operators running multiple conduit nodes with [conduit-manager](https://github.com/SamNet-dev/conduit-manager) who need centralized monitoring without SSH or root access.
 
+> **Note:** This agent is designed to work with servers managed by [conduit-manager](https://github.com/SamNet-dev/conduit-manager). Install conduit-manager first to deploy your Conduit containers, then install conduit-expose to monitor them. For a web dashboard, pair it with [conduit-monitor](https://github.com/omid3098/conduit_monitor).
+
 ## Quick Install
 
 ```bash
