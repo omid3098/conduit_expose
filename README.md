@@ -24,7 +24,7 @@ The installer will:
 
   Connection URI (paste into your monitoring dashboard):
 
-  conduit://0267b7e7b00b59b99fa99095bf09ea6e@5.75.150.242:44626
+  conduit://a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4@203.0.113.42:44626
 
   Manage: conduit-expose-ctl [status|restart|update|uninstall|show-config|uri]
 ```
