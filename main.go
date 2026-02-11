@@ -243,10 +243,15 @@ func collectAll(ctx context.Context, cli *client.Client, cfg *Config, session *S
 	}
 
 	// 7. Country data from CM files
+	// CM's tracker_snapshot contains unique IPs from the latest tcpdump capture window.
+	// These raw counts include scanners, system traffic, etc. — more than actual tunnel
+	// sessions. Conduit Manager scales them proportionally:
+	//   est = (country_ips * connected_clients) / total_snapshot_ips
+	// This makes country totals sum to exactly connected_clients.
 	var clientsByCountry []CountryStats
 	var trafficByCountry []CountryTrafficStats
 	if cmData.Available {
-		clientsByCountry = cmData.ClientsByCountry
+		clientsByCountry = scaleCountryStats(cmData.ClientsByCountry, totalConnected)
 		trafficByCountry = cmData.TrafficByCountry
 	}
 

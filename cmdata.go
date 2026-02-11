@@ -118,6 +118,52 @@ func readTrackerSnapshot(path string) []CountryStats {
 	return result
 }
 
+// scaleCountryStats applies the same proportional scaling Conduit Manager uses:
+//
+//	scaled = (country_ips * connected_clients) / total_snapshot_ips
+//
+// This ensures the country breakdown sums to exactly connectedClients,
+// matching what CM's TUI shows as "Active Clients".
+func scaleCountryStats(raw []CountryStats, connectedClients int64) []CountryStats {
+	if len(raw) == 0 || connectedClients <= 0 {
+		return raw
+	}
+
+	var snapTotal int64
+	for _, cs := range raw {
+		snapTotal += int64(cs.Connections)
+	}
+	if snapTotal == 0 {
+		return raw
+	}
+
+	scaled := make([]CountryStats, 0, len(raw))
+	var scaledSum int64
+	for _, cs := range raw {
+		est := (int64(cs.Connections) * connectedClients) / snapTotal
+		if est < 1 && cs.Connections > 0 {
+			est = 1 // at least 1 if there were any IPs
+		}
+		scaledSum += est
+		scaled = append(scaled, CountryStats{
+			Country:     cs.Country,
+			Connections: int(est),
+		})
+	}
+
+	// Distribute rounding remainder to the largest country (same approach as CM)
+	if diff := connectedClients - scaledSum; diff != 0 && len(scaled) > 0 {
+		scaled[0].Connections += int(diff)
+	}
+
+	// Re-sort after adjustment
+	sort.Slice(scaled, func(i, j int) bool {
+		return scaled[i].Connections > scaled[j].Connections
+	})
+
+	return scaled
+}
+
 // readCumulativeData parses traffic_stats/cumulative_data.
 // Format: COUNTRY|FROM_BYTES|TO_BYTES per line.
 func readCumulativeData(path string) []CountryTrafficStats {
